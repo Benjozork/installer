@@ -1,55 +1,24 @@
-import {
-  FragmenterContext,
-  FragmenterContextEvents,
-  FragmenterInstaller,
-  FragmenterInstallerEvents,
-} from '@flybywiresim/fragmenter';
 import channels from 'common/channels';
 import { ipcMain, WebContents } from 'electron';
 import fs from 'fs';
 import { promisify } from 'util';
 import path from 'path';
-
-let lastProgressSent = 0;
+import { InstallPipelineFactory } from 'main/install/InstallPipelineFactory';
+import { InstallPipelineExecutor } from 'main/install/InstallPipelineExecutor';
+import { UINotification, UINotificationKind } from 'main/install/InstallPipeline';
 
 export class InstallManager {
   static async install(
     sender: WebContents,
     ourInstallID: number,
     url: string,
+    installDir: string,
     tempDir: string,
-    destDir: string,
   ): Promise<boolean | Error> {
     const abortController = new AbortController();
 
-    const fragmenterContext = new FragmenterContext({ useConsoleLog: true }, abortController.signal);
-    const fragmenterInstaller = new FragmenterInstaller(fragmenterContext, url, destDir, {
-      temporaryDirectory: tempDir,
-      forceManifestCacheBust: true,
-    });
-
-    const forwardFragmenterInstallerEvent = (event: keyof FragmenterInstallerEvents) => {
-      fragmenterInstaller.on(event, (...args: unknown[]) => {
-        if (event === 'downloadProgress' || event === 'unzipProgress' || event === 'copyProgress') {
-          const currentTime = performance.now();
-          const timeSinceLastProgress = currentTime - lastProgressSent;
-
-          if (timeSinceLastProgress > 25) {
-            sender.send(channels.installManager.fragmenterEvent, ourInstallID, event, ...args);
-
-            lastProgressSent = currentTime;
-          }
-        } else {
-          sender.send(channels.installManager.fragmenterEvent, ourInstallID, event, ...args);
-        }
-      });
-    };
-
-    const forwardFragmenterContextEvent = (event: keyof FragmenterContextEvents) => {
-      fragmenterContext.on(event, (...args: unknown[]) => {
-        sender.send(channels.installManager.fragmenterEvent, ourInstallID, event, ...args);
-      });
-    };
+    const pipeline = InstallPipelineFactory.createPipeline(url);
+    const executor = new InstallPipelineExecutor();
 
     const handleCancelInstall = (_: unknown, installID: number) => {
       if (installID !== ourInstallID) {
@@ -62,44 +31,20 @@ export class InstallManager {
     // Setup cancel event listener
     ipcMain.on(channels.installManager.cancelInstall, handleCancelInstall);
 
-    forwardFragmenterInstallerEvent('error');
-    forwardFragmenterInstallerEvent('downloadStarted');
-    forwardFragmenterInstallerEvent('downloadProgress');
-    forwardFragmenterInstallerEvent('downloadInterrupted');
-    forwardFragmenterInstallerEvent('downloadFinished');
-    forwardFragmenterInstallerEvent('unzipStarted');
-    forwardFragmenterInstallerEvent('unzipProgress');
-    forwardFragmenterInstallerEvent('unzipFinished');
-    forwardFragmenterInstallerEvent('copyStarted');
-    forwardFragmenterInstallerEvent('copyProgress');
-    forwardFragmenterInstallerEvent('copyFinished');
-    forwardFragmenterInstallerEvent('retryScheduled');
-    forwardFragmenterInstallerEvent('retryStarted');
-    forwardFragmenterInstallerEvent('fullDownload');
-    forwardFragmenterInstallerEvent('cancelled');
-    forwardFragmenterInstallerEvent('logInfo');
-    forwardFragmenterInstallerEvent('logWarn');
-    forwardFragmenterInstallerEvent('logError');
-    forwardFragmenterContextEvent('phaseChange');
-
-    let ret = false;
-
-    try {
-      await fragmenterInstaller.install();
-
-      ret = true;
-    } catch (e) {
-      if (e.message.startsWith('FragmenterError')) {
-        ret = e;
-      } else {
-        throw e;
-      }
-    }
+    const result = await executor.execute(abortController.signal, { installDir, tempDir }, pipeline, {
+      reportEvent(event: UINotification) {
+        switch (event.kind) {
+          case UINotificationKind.FragmenterEvent: {
+            sender.send(channels.installManager.fragmenterEvent, ourInstallID, event.event, ...event.args);
+          }
+        }
+      },
+    });
 
     // Tear down cancel event listener
     ipcMain.removeListener(channels.installManager.cancelInstall, handleCancelInstall);
 
-    return ret;
+    return result;
   }
 
   static async uninstall(
@@ -134,7 +79,7 @@ export class InstallManager {
     ipcMain.handle(
       channels.installManager.installFromUrl,
       async (event, installID: number, url: string, tempDir: string, destDir: string) => {
-        return InstallManager.install(event.sender, installID, url, tempDir, destDir);
+        return InstallManager.install(event.sender, installID, url, destDir, tempDir);
       },
     );
 
