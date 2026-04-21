@@ -1,36 +1,31 @@
-import * as actions from './actionTypes';
+import { ReleaseInfo } from 'renderer/utils/AddonData';
+
+export interface DownloadProgress {
+  interrupted: boolean;
+  totalPercent: number;
+  splitPartPercent?: number;
+  splitPartIndex?: number;
+  splitPartCount?: number;
+}
 
 export interface DownloadItem {
-    id: string
-    progress: number
+  id: string;
+  progress: DownloadProgress;
+  module: string;
+  moduleIndex: number;
+  moduleCount: number;
+  abortControllerID: number;
 }
 
 export type DownloadsState = DownloadItem[];
 
-export interface UpdateDownloadProgressAction {
-    type: typeof actions.UPDATE_DOWNLOAD_PROGRESS
-    payload: {
-        id: string
-        progress: number
-    }
+export interface ReleaseData {
+  name: string;
+  publishedAt: number;
+  htmlUrl: string;
+  body: string;
 }
 
-export interface RegisterNewDownloadProgressAction {
-    type: typeof actions.REGISTER_NEW_DOWNLOAD
-    payload: {
-        id: string
-    }
-}
+export type ReleaseNotesState = ReleaseData[];
 
-export interface DeleteDownloadAction {
-    type: typeof actions.DELETE_DOWNLOAD
-    payload: {
-        id: string
-    }
-}
-
-export type DownloadActionType = UpdateDownloadProgressAction | RegisterNewDownloadProgressAction | DeleteDownloadAction
-
-export interface RootStore {
-    downloads: DownloadsState
-}
+export type AddonAndTrackLatestVersionNamesState = { [addonKey: string]: { [trackKey: string]: ReleaseInfo } };

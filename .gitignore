@@ -84,12 +84,23 @@ typings/
 
 # Webpack
 .webpack/
+webpack/
 
 # Electron-Forge
 out/
+
+# NSIS
+dist/
 
 # JetBrains
 .idea/
 
 # VIM
 .vim/
+
+# VSCode
+.vscode/
+
+# License checker
+extraResources/licenses.md
+.github/LICENSES.yaml

@@ -1,215 +1,166 @@
 import { hot } from 'react-hot-loader';
-import React, { useState } from 'react';
-import { Layout, Menu, } from 'antd';
+import React, { useEffect, useState } from 'react';
 import SimpleBar from 'simplebar-react';
+import { Logo } from 'renderer/components/Logo';
+import { SettingsSection } from 'renderer/components/SettingsSection';
+import { DebugSection } from 'renderer/components/DebugSection';
+import { InstallerUpdate } from 'renderer/components/InstallerUpdate';
+import { WindowButtons } from 'renderer/components/WindowActionButtons';
+import { Addon } from 'renderer/utils/InstallerConfiguration';
+import { ErrorModal } from '../ErrorModal';
+import { NavBar, NavBarPublisher } from 'renderer/components/App/NavBar';
+import { Redirect, Route, Switch, useHistory, useLocation } from 'react-router-dom';
+import { useAppSelector } from 'renderer/redux/store';
+import settings, { useSetting } from 'renderer/rendererSettings';
+import './index.css';
+import { ipcRenderer } from 'electron';
+import channels from 'common/channels';
+import { ModalContainer } from '../Modal';
+import { PublisherSection } from 'renderer/components/PublisherSection';
+import * as packageInfo from '../../../../package.json';
+import { InstallManager } from 'renderer/utils/InstallManager';
+import { enabledSimulators, Simulators } from 'renderer/utils/SimManager';
 
-import Logo from 'renderer/components/LogoWithText';
-import HomeSection from 'renderer/components/HomeSection';
-import SettingsSection from 'renderer/components/SettingsSection';
-import AircraftSection from 'renderer/components/AircraftSection';
-import WindowActionButtons from 'renderer/components/WindowActionButtons';
-import A320NoseSVG from 'renderer/assets/a32nx_nose.svg';
-import A380NoseSVG from 'renderer/assets/a380x_nose.svg';
-import CFMLeap1SVG from 'renderer/assets/cfm_leap1-a.svg';
+const App = () => {
+  const history = useHistory();
+  const location = useLocation();
 
-import {
-    Container,
-    PageHeader,
-    HomeMenuItem,
-    PageContent,
-    PageSider,
-    SettingsMenuItem,
-    MainLayout,
-    AircraftMenuItem,
-    AircraftName,
-    AircraftDetailsContainer
-} from './styles';
-import NoInternetModal from '../NoInternetModal';
-import { GitHubApi } from "renderer/components/App/GitHubApi";
+  const configuration = useAppSelector((state) => state.configuration);
 
-export type Mod = {
-    name: string,
-    repoName: string,
-    aircraftName: string,
-    key: string,
-    backgroundImageUrls: string[],
-    shortDescription: string,
-    description: string,
-    menuIconUrl: string,
-    targetDirectory: string,
-    variants: ModVariant[],
-    versions: ModVersion[],
-    enabled: boolean,
-}
+  const [addons] = useState<Addon[]>(
+    configuration.publishers.reduce((arr, curr) => {
+      arr.push(...curr.addons);
+      return arr;
+    }, []),
+  );
 
-export type ModVersion = {
-    title: string,
-    date: string,
-    type: 'major' | 'minor' | 'patch'
-}
+  const [managedSim, setManagedSim] = useSetting<Simulators>('cache.main.managedSim');
 
-export type ModVariant = {
-    name: string,
-    key: string,
-    imageUrl: string,
-    imageAlt: string,
-    enabled: boolean,
-    tracks: ModTrack[],
-}
+  if (!Object.values(Simulators).includes(managedSim) && Object.values(enabledSimulators()).length > 0) {
+    setManagedSim(Object.values(enabledSimulators())[0]);
+  }
 
-export type ModTrack = {
-    name: string,
-    key: string,
-    url: string,
-}
-
-/**
- * Obtain versions for a specific mod
- *
- * @param mod {Mod}
- */
-const fillModVersions = (mod: Mod) => {
-    GitHubApi.getVersions(mod)
-        .then(versions => mod.versions = versions.filter(v => /v\d/.test(v.title)))
-        .then(() => {
-            mod.versions.forEach((version, index) => {
-                const currentVersionTitle = version.title;
-                const otherVersionTitle = index === mod.versions.length - 1
-                    ? mod.versions[index - 1].title
-                    : mod.versions[index + 1].title;
-
-                if (currentVersionTitle[1] !== otherVersionTitle[1]) {
-                    mod.versions[index].type = 'major';
-                } else if (currentVersionTitle[3] !== otherVersionTitle[3]) {
-                    mod.versions[index].type = 'minor';
-                } else if (currentVersionTitle[5] !== otherVersionTitle[5]) {
-                    mod.versions[index].type = 'patch';
-                }
-            });
-        });
-};
-
-function App() {
-    const [selectedItem, setSelectedItem] = useState<string>('home');
-
-    const mods: Mod[] = [
-        {
-            name: 'A32NX',
-            repoName: 'a32nx',
-            aircraftName: 'A320neo',
-            key: 'A32NX',
-            enabled: true,
-            menuIconUrl: A320NoseSVG,
-            backgroundImageUrls: [
-                'https://nyc3.digitaloceanspaces.com/fselite/2020/11/123263426_126778999193686_7966913238295950901_o.png'
-            ],
-            shortDescription: 'Airbus A320neo Series',
-            description: 'The A320neo (new engine option) is one of many upgrades introduced by Airbus to help maintain ' +
-                'its A320 product line’s position as the world’s most advanced and fuel-efficient single-aisle ' +
-                'aircraft family. The baseline A320neo jetliner has a choice of two new-generation engines ' +
-                '(the PurePower PW1100G-JM from Pratt and Whitney and the LEAP-1A from CFM International) ' +
-                'and features large, fuel-saving wingtip devices known as Sharklets.',
-            targetDirectory: 'A32NX',
-            variants: [
-                {
-                    name: 'Neo (CFM LEAP-1A) / (PW1100G-JM)',
-                    key: 'LEAP',
-                    imageUrl: CFMLeap1SVG,
-                    imageAlt: "CFM Leap-1",
-                    enabled: true,
-                    tracks: [
-                        {
-                            name: 'Development',
-                            key: 'a32nx-dev',
-                            url: 'https://flybywiresim-packages.nyc3.cdn.digitaloceanspaces.com/vmaster/A32NX-master.zip',
-                        },
-                        {
-                            name: 'Stable',
-                            key: 'a32nx-stable',
-                            url: 'https://flybywiresim-packages.nyc3.cdn.digitaloceanspaces.com/stable/A32NX-stable.zip',
-                        },
-                        {
-                            name: 'FBW',
-                            key: 'a32nx-fbw',
-                            url: 'https://flybywiresim-packages.nyc3.cdn.digitaloceanspaces.com/vmaster-cfbw/A32NX-master-cfbw.zip',
-                        }
-                    ],
-                }
-            ],
-            versions: []
-        },
-        {
-            name: 'A380',
-            repoName: 'a380x',
-            aircraftName: 'A380',
-            key: 'A380',
-            enabled: false,
-            menuIconUrl: A380NoseSVG,
-            backgroundImageUrls: [],
-            shortDescription: 'Airbus A380-800',
-            description: '',
-            targetDirectory: 'A380',
-            variants: [],
-            versions: []
-        }
-    ];
-
-    // Obtain mod versions
-
-    mods.forEach(fillModVersions);
-
-    let sectionToShow;
-    switch (selectedItem) {
-        case 'home':
-            sectionToShow = <HomeSection/>;
-            break;
-        case 'settings':
-            sectionToShow = <SettingsSection/>;
-            break;
-
-        default:
-            sectionToShow = <AircraftSection mod={mods.find(x => x.key === selectedItem)}/>;
-            break;
+  useEffect(() => {
+    for (const addon of addons) {
+      void InstallManager.refreshAddonInstallState(addon).then(() => void InstallManager.checkForUpdates(addon));
     }
 
-    return (
-        <>
-            <NoInternetModal/>
-            <SimpleBar>
-                <Container>
-                    <MainLayout>
-                        <PageHeader>
-                            <Logo/>
-                            <WindowActionButtons/>
-                        </PageHeader>
+    if (settings.get('cache.main.lastShownSection')) {
+      history.push(settings.get('cache.main.lastShownSection'));
+    }
 
-                        <Layout className="site-layout">
-                            <PageSider>
-                                <Menu theme="dark" mode="inline" defaultSelectedKeys={['home']}
-                                    onSelect={selectInfo => setSelectedItem(selectInfo.key.toString())}>
-                                    <HomeMenuItem key="home">Home</HomeMenuItem>
-                                    {
-                                        mods.map(mod =>
-                                            <AircraftMenuItem key={mod.key} disabled={!mod.enabled}>
-                                                <AircraftDetailsContainer>
-                                                    <AircraftName>{mod.aircraftName}</AircraftName>
-                                                </AircraftDetailsContainer>
-                                                <img id={mod.key} src={mod.menuIconUrl} alt={mod.aircraftName}/>
-                                            </AircraftMenuItem>
-                                        )
-                                    }
-                                    <SettingsMenuItem key="settings">Settings</SettingsMenuItem>
-                                </Menu>
-                            </PageSider>
-                            <PageContent>
-                                {sectionToShow}
-                            </PageContent>
-                        </Layout>
-                    </MainLayout>
-                </Container>
-            </SimpleBar>
-        </>
+    // Let's listen for a route change and set the last shown section to the incoming route pathname
+    history.listen((location) => {
+      settings.set('cache.main.lastShownSection', location.pathname);
+    });
+  }, [addons, history]);
+
+  useEffect(() => {
+    const updateCheck = setInterval(
+      () => {
+        ipcRenderer.send(channels.checkForInstallerUpdate);
+
+        for (const addon of addons) {
+          void InstallManager.checkForUpdates(addon);
+        }
+      },
+      5 * 60 * 1000,
     );
-}
+
+    return () => clearInterval(updateCheck);
+  }, [addons]);
+
+  const configUrl = settings.get('mainSettings.configDownloadUrl') as string;
+
+  const isDevelopmentConfigURL = () => {
+    const productionURL = packageInfo.configUrls.production;
+    // Protection against accidental screenshots of confidential config urls
+    // Limited to flybywire config url to prevent 3rd party urls to be hidden
+    let showDevURL = 'n/a';
+    if (!configUrl.includes(packageInfo.configUrls.confidentialBaseUrl)) {
+      showDevURL = configUrl;
+    }
+    return (
+      configUrl !== productionURL && (
+        <div className="my-auto ml-32 flex gap-x-4 text-2xl text-gray-400">
+          <pre className="text-utility-amber">Developer Configuration Used: </pre>
+          <pre className="text-quasi-white">{showDevURL}</pre>
+        </div>
+      )
+    );
+  };
+
+  return (
+    <>
+      <ErrorModal />
+
+      <ModalContainer />
+
+      <SimpleBar>
+        <div className="flex h-screen w-full flex-col">
+          <div className="flex h-full flex-col overflow-hidden">
+            <div className="draggable absolute z-50 flex h-12 w-full flex-row items-center bg-black pl-4">
+              <div className="flex h-full flex-1 flex-row items-stretch overflow-hidden">
+                <Logo />
+
+                {import.meta.env.DEV && (
+                  <div className="my-auto ml-32 flex gap-x-4 text-2xl text-gray-400">
+                    <pre>{packageInfo.version}</pre>
+                    <pre className="text-gray-500">|</pre>
+                    <pre className="text-utility-amber">Development mode</pre>
+                    <pre className="text-gray-500">|</pre>
+                    <pre className="text-quasi-white">{location.pathname}</pre>
+                  </div>
+                )}
+                {isDevelopmentConfigURL()}
+              </div>
+
+              <div className="not-draggable flex h-full flex-row">
+                <InstallerUpdate />
+                <WindowButtons />
+              </div>
+            </div>
+
+            <div className="flex h-full flex-row justify-start pt-10">
+              <div className="z-40 h-full">
+                <NavBar>
+                  {configuration.publishers
+                    .filter((publisher) => publisher.addons.some((addon) => addon.simulator === managedSim))
+                    .map((publisher) => (
+                      <NavBarPublisher
+                        key={publisher.key}
+                        to={`/addon-section/${publisher.name}`}
+                        publisher={publisher}
+                      />
+                    ))}
+                </NavBar>
+              </div>
+
+              <div className="m-0 flex w-full bg-navy">
+                <Switch>
+                  <Route exact path="/">
+                    <Redirect to={`/addon-section/${configuration.publishers[0].name}`} />
+                  </Route>
+                  <Route path="/addon-section/:publisherName">
+                    <PublisherSection />
+                  </Route>
+                  <Route exact path="/debug">
+                    <DebugSection />
+                  </Route>
+                  <Route path="/settings">
+                    <SettingsSection />
+                  </Route>
+                  <Route path="*">
+                    <Redirect to={'/'} />
+                  </Route>
+                </Switch>
+              </div>
+            </div>
+          </div>
+        </div>
+      </SimpleBar>
+    </>
+  );
+};
 
 export default hot(module)(App);
