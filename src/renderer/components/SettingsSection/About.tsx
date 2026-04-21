@@ -1,7 +1,7 @@
 import React, { FC, useEffect, useState } from 'react';
 import FbwTail from 'renderer/assets/FBW-Tail.svg';
 import * as packageInfo from '../../../../package.json';
-import { shell } from 'electron';
+import channels from 'common/channels';
 import { ChangelogModal, useModals } from '../Modal';
 import { SentrySessionCard } from 'renderer/components/SentrySessionCard';
 import { ThirdPartyLicensesModal } from 'renderer/components/Modal/ThirdPartyLicensesModal';
@@ -11,8 +11,10 @@ export const AboutSettings: FC = () => {
 
   useEffect(() => {
     if (logoRotation / 360 > 5) {
-      shell.openExternal('https://www.youtube.com/watch?v=dQw4w9WgXcQ?autoplay=1');
-
+      window.electronAPI.ipc.send(
+        channels.shell.openExternal,
+        'https://www.youtube.com/watch?v=dQw4w9WgXcQ?autoplay=1',
+      );
       setLogoRotation(0);
     }
   }, [logoRotation]);

@@ -19,6 +19,9 @@ export default defineConfig({
   main: {
     ...baseOptions,
   },
+  preload: {
+    ...baseOptions,
+  },
   renderer: {
     ...baseOptions,
     plugins: [ViteYaml(), renderer()],

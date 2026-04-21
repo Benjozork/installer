@@ -1,6 +1,4 @@
 import React from 'react';
-import { shell } from 'electron';
-import { ipcRenderer } from 'electron';
 import { WindowsControl } from 'react-windows-controls';
 import channels from 'common/channels';
 import { Directories } from 'renderer/utils/Directories';
@@ -26,14 +24,15 @@ export const Button: React.FC<ButtonProps> = ({ id, className, onClick, isClose,
 export const WindowButtons: React.FC = () => {
   const { showModal } = useModals();
 
-  const openGithub = () => shell.openExternal('https://github.com/flybywiresim/a32nx/issues/new/choose');
+  const openGithub = () =>
+    window.electronAPI.ipc.send(channels.shell.openExternal, 'https://github.com/flybywiresim/a32nx/issues/new/choose');
 
   const handleMinimize = () => {
-    ipcRenderer.send(channels.window.minimize);
+    window.electronAPI.ipc.send(channels.window.minimize);
   };
 
   const handleMaximize = () => {
-    ipcRenderer.send(channels.window.maximize);
+    window.electronAPI.ipc.send(channels.window.maximize);
   };
 
   const handleClose = () => {
@@ -52,8 +51,8 @@ export const WindowButtons: React.FC = () => {
         />,
       );
     } else {
-      Directories.removeAllTemp();
-      ipcRenderer.send(channels.window.close);
+      void Directories.removeAllTemp();
+      window.electronAPI.ipc.send(channels.window.close);
     }
   };
 

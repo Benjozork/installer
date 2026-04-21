@@ -1,6 +1,6 @@
 import React, { FC } from 'react';
 import settings, { useSetting } from 'renderer/rendererSettings';
-import { ipcRenderer } from 'electron';
+import channels from 'common/channels';
 import { Toggle } from '../Toggle';
 
 const SettingsItem: FC<{ name: string }> = ({ name, children }) => (
@@ -21,7 +21,7 @@ const AutoStartSettingItem = ({ value, setValue }: SettingItemProps<boolean>) =>
     const newState = !value;
     setValue(newState);
     settings.set('mainSettings.autoStartApp', newState);
-    ipcRenderer.send('request-startup-at-login-changed', newState);
+    window.electronAPI.ipc.send('request-startup-at-login-changed', newState);
   };
 
   return (

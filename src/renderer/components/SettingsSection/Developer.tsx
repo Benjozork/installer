@@ -3,7 +3,6 @@ import { useSetting } from 'renderer/rendererSettings';
 import { Toggle } from 'renderer/components/Toggle';
 import * as packageInfo from '../../../../package.json';
 import { Button, ButtonType } from 'renderer/components/Button';
-import { ipcRenderer } from 'electron';
 import channels from 'common/channels';
 
 const SettingsItem: FC<{ name: string }> = ({ name, children }) => (
@@ -22,7 +21,6 @@ export const DeveloperSettings: React.FC = () => {
   const [configForceUseLocal, setConfigForceUseLocal] = useSetting<boolean>('mainSettings.configForceUseLocal');
 
   const validateUrls = useCallback(() => {
-    // Validate main config URL
     if (configDownloadUrl) {
       fetch(configDownloadUrl)
         .then((response) => {
@@ -35,7 +33,6 @@ export const DeveloperSettings: React.FC = () => {
       setConfigDownloadUrlValid(false);
     }
 
-    // Validate QA config URLs
     qaConfigUrls &&
       Object.entries(qaConfigUrls).forEach(([key, url]) => {
         if (url) {
@@ -137,7 +134,7 @@ export const DeveloperSettings: React.FC = () => {
               <Button
                 type={ButtonType.Neutral}
                 className="ml-2 h-fit min-h-10 text-lg"
-                onClick={() => ipcRenderer.send(channels.window.reload)}
+                onClick={() => window.electronAPI.ipc.send(channels.window.reload)}
               >
                 Reload Installer
               </Button>

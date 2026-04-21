@@ -5,14 +5,13 @@ import { ApplicationStatus } from 'renderer/components/AddonSection/Enums';
 import { ExternalApps } from 'renderer/utils/ExternalApps';
 import path from 'path';
 import { Directories } from 'renderer/utils/Directories';
-import { shell } from '@electron/remote';
-import { promises } from 'fs';
+import channels from 'common/channels';
 
 export const STARTUP_FOLDER_PATH = 'Microsoft\\Windows\\Start Menu\\Programs\\Startup\\';
 
 export class BackgroundServices {
-  private static validateExecutablePath(path: string): boolean {
-    return /^[a-zA-Z\d_-]+$/.test(path);
+  private static validateExecutablePath(execPath: string): boolean {
+    return /^[a-zA-Z\d_-]+$/.test(execPath);
   }
 
   public static getExternalAppFromBackgroundService(addon: Addon, publisher: Publisher): ExternalApplicationDefinition {
@@ -34,9 +33,7 @@ export class BackgroundServices {
 
   static isRunning(addon: Addon, publisher: Publisher): boolean {
     const app = this.getExternalAppFromBackgroundService(addon, publisher);
-
     const state = store.getState().applicationStatus[app.key];
-
     return state === ApplicationStatus.Open;
   }
 
@@ -47,26 +44,23 @@ export class BackgroundServices {
       throw new Error('Addon has no background service');
     }
 
-    let folderEntries;
+    const startupDir = path.join(Directories.appData(), STARTUP_FOLDER_PATH);
+
+    type DirEntry = { name: string; isFile: boolean; isDirectory: boolean };
+    let folderEntries: DirEntry[] | undefined;
+
     try {
-      folderEntries = await promises.readdir(path.join(Directories.appData(), STARTUP_FOLDER_PATH), {
-        withFileTypes: true,
-      });
+      folderEntries = (await window.electronAPI.ipc.invoke(channels.fs.readdir, startupDir)) as DirEntry[];
     } catch (e) {
-      console.error(
-        '[BackgroundServices](isAutoStartEnabled) Could not read contents of startup folder. See exception below',
-      );
-      console.error(e);
+      console.error('[BackgroundServices](isAutoStartEnabled) Could not read contents of startup folder:', e);
     }
 
     if (!folderEntries) {
       return false;
     }
 
-    const shortcuts = folderEntries.filter((it) => it.isFile() && path.extname(it.name) === '.lnk');
-    const matchingShortcut = shortcuts.find(
-      (it) => path.parse(it.name).name === backgroundService.executableFileBasename,
-    );
+    const shortcuts = folderEntries.filter((it) => it.isFile && path.extname(it.name) === '.lnk');
+    const matchingShortcut = shortcuts.find((it) => path.parse(it.name).name === backgroundService.executableFileBasename);
 
     return matchingShortcut !== undefined;
   }
@@ -79,7 +73,7 @@ export class BackgroundServices {
     }
 
     if (!this.validateExecutablePath(backgroundService.executableFileBasename)) {
-      throw new Error('Executable path much match /^[a-zA-Z\\d_-]+$/.');
+      throw new Error('Executable path must match /^[a-zA-Z\\d_-]+$/.');
     }
 
     const exePath = path.join(
@@ -92,11 +86,11 @@ export class BackgroundServices {
     const shortcutPath = path.join(shortcutDir, `${backgroundService.executableFileBasename}.lnk`);
 
     if (enabled) {
-      const created = shell.writeShortcutLink(shortcutPath, 'create', {
+      const created = (await window.electronAPI.ipc.invoke(channels.shell.writeShortcutLink, shortcutPath, 'create', {
         target: exePath,
         args: commandLineArgs,
         cwd: path.dirname(exePath),
-      });
+      })) as boolean;
 
       if (!created) {
         console.error('[BackgroundServices](setAutoStartEnabled) Could not create shortcut');
@@ -104,10 +98,7 @@ export class BackgroundServices {
         console.log('[BackgroundServices](setAutoStartEnabled) Shortcut created');
       }
     } else {
-      promises.rm(shortcutPath).catch((e) => {
-        console.error('[BackgroundServices](setAutoStartEnabled) Could not remove shortcut. See exception below.');
-        console.error(e);
-      });
+      window.electronAPI.ipc.send(channels.shell.removeShortcut, shortcutPath);
     }
   }
 
@@ -119,7 +110,7 @@ export class BackgroundServices {
     }
 
     if (!this.validateExecutablePath(backgroundService.executableFileBasename)) {
-      throw new Error('Executable path much match /^[a-zA-Z\\d_-]+$/.');
+      throw new Error('Executable path must match /^[a-zA-Z\\d_-]+$/.');
     }
 
     const exePath = path.normalize(
@@ -129,20 +120,11 @@ export class BackgroundServices {
       ),
     );
 
-    await shell.openPath(exePath);
-
-    // if (exePath.startsWith('..')) {
-    //     throw new Error('Validated and normalized path still traversed directory.');
-    // }
-    //
-    // const commandLineArgs = backgroundService.commandLineArgs ?? [];
-    //
-    // spawn(exePath, commandLineArgs, { cwd: Directories.inCommunity(addon.targetDirectory), shell: true, detached: true });
+    window.electronAPI.ipc.send(channels.openPath, exePath);
   }
 
   static async kill(addon: Addon, publisher: Publisher): Promise<void> {
     const app = this.getExternalAppFromBackgroundService(addon, publisher);
-
     return ExternalApps.kill(app);
   }
 }

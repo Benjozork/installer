@@ -1,18 +1,7 @@
-import net from 'net';
+import channels from 'common/channels';
 
 export class McduServer {
-  static async isRunning(): Promise<boolean> {
-    return new Promise((resolve) => {
-      const socket = net.connect(8380);
-
-      socket.on('connect', () => {
-        resolve(true);
-        socket.destroy();
-      });
-      socket.on('error', () => {
-        resolve(false);
-        socket.destroy();
-      });
-    });
+  static isRunning(): Promise<boolean> {
+    return window.electronAPI.ipc.invoke(channels.net.checkTcpPort, 8380) as Promise<boolean>;
   }
 }

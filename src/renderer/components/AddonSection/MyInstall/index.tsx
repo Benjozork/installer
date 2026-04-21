@@ -1,4 +1,4 @@
-import React, { FC } from 'react';
+import React, { FC, useEffect, useState } from 'react';
 import {
   Addon,
   DirectoryDefinition,
@@ -6,11 +6,9 @@ import {
   NamedDirectoryDefinition,
 } from 'renderer/utils/InstallerConfiguration';
 import { BoxArrowRight, Folder } from 'react-bootstrap-icons';
-import { ipcRenderer, shell } from 'electron';
 import { Directories } from 'renderer/utils/Directories';
 import { useAppSelector } from 'renderer/redux/store';
 import { InstallStatusCategories } from 'renderer/components/AddonSection/Enums';
-import fs from 'fs';
 import channels from 'common/channels';
 
 export interface MyInstallProps {
@@ -24,24 +22,37 @@ export const MyInstall: FC<MyInstallProps> = ({ addon }) => {
 
   const directories: NamedDirectoryDefinition[] = [
     {
-      location: {
-        in: 'community',
-        path: addon.targetDirectory,
-      },
+      location: { in: 'community', path: addon.targetDirectory },
       title: 'Package Files',
     },
     ...(addon.myInstallPage?.directories ?? []),
   ];
 
+  const [dirExists, setDirExists] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    const checkDirs = async () => {
+      const results: Record<string, boolean> = {};
+      for (const def of directories) {
+        const fullPath = fulldirectory(def);
+        if (fullPath) {
+          results[fullPath] = (await window.electronAPI.ipc.invoke(channels.fs.existsSync, fullPath)) as boolean;
+        }
+      }
+      setDirExists(results);
+    };
+
+    void checkDirs();
+  }, [addon]);
+
   const handleClickLink = (link: ExternalLink) => {
     const parsed = new URL(link.url);
-
     if (parsed.protocol.match(/https?/)) {
-      shell.openExternal(link.url).then();
+      window.electronAPI.ipc.send(channels.shell.openExternal, link.url);
     }
   };
 
-  const fulldirectory = (def: DirectoryDefinition) => {
+  const fulldirectory = (def: DirectoryDefinition): string | null => {
     switch (def.location.in) {
       case 'community':
         return Directories.inInstallLocation(addon.simulator, def.location.path);
@@ -51,22 +62,23 @@ export const MyInstall: FC<MyInstallProps> = ({ addon }) => {
         return Directories.inPackageCache(addon, def.location.path);
       case 'documents': {
         const documents = Directories.inDocumentsFolder(def.location.path);
-        if (fs.existsSync(documents)) {
+        const exists = dirExists[documents];
+        if (exists) {
           return documents;
         }
         // fallback for simbridge installations prior to 0.6
-        // remove after transition period
         return Directories.inInstallPackage(addon, 'resources');
       }
     }
   };
 
   const handleClickDirectory = (def: DirectoryDefinition) => {
-    ipcRenderer.send(channels.openPath, fulldirectory(def));
+    window.electronAPI.ipc.send(channels.openPath, fulldirectory(def));
   };
 
-  const existsDirectory = (def: DirectoryDefinition) => {
-    return fs.existsSync(fulldirectory(def));
+  const existsDirectory = (def: DirectoryDefinition): boolean => {
+    const fullPath = fulldirectory(def);
+    return fullPath ? (dirExists[fullPath] ?? false) : false;
   };
 
   const directoriesDisabled = !InstallStatusCategories.installed.includes(installStates[addon.key]?.status);
@@ -85,7 +97,6 @@ export const MyInstall: FC<MyInstallProps> = ({ addon }) => {
                 onClick={() => handleClickLink(it)}
               >
                 <BoxArrowRight size={24} />
-
                 {it.title}
               </button>
             ))}
@@ -105,7 +116,6 @@ export const MyInstall: FC<MyInstallProps> = ({ addon }) => {
                 onClick={() => handleClickDirectory(it)}
               >
                 <Folder size={24} />
-
                 {it.title}
               </button>
             ))}

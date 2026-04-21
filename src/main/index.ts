@@ -2,19 +2,19 @@ import { app, BrowserWindow, Menu, shell, ipcMain } from 'electron';
 import { NsisUpdater, autoUpdater } from 'electron-updater';
 import installExtension, { REDUX_DEVTOOLS, REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
 import * as packageInfo from '../../package.json';
-import settings, { persistWindowSettings } from './mainSettings';
+import appSettings, { persistWindowSettings } from './appSettings';
 import channels from 'common/channels';
-import * as remote from '@electron/remote/main';
 import { InstallManager } from 'main/InstallManager';
 import { SentryClient } from 'main/SentryClient';
-import Store from 'electron-store';
+import { SystemHandlers } from 'main/ipc/SystemHandlers';
 import path from 'path';
 
 function initializeApp() {
-  Store.initRenderer();
+  let mainWindow: BrowserWindow;
+
+  const getMainWindow = () => mainWindow;
 
   function createWindow() {
-    // Create the browser window.
     mainWindow = new BrowserWindow({
       width: 1280,
       height: 800,
@@ -25,12 +25,11 @@ function initializeApp() {
       backgroundColor: '#1b2434',
       show: false,
       webPreferences: {
-        nodeIntegration: true,
-        contextIsolation: false,
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, '../preload/index.js'),
       },
     });
-
-    remote.enable(mainWindow.webContents);
 
     const UpsertKeyValue = (
       header: Record<string, string> | Record<string, string[]>,
@@ -61,9 +60,7 @@ function initializeApp() {
       const { responseHeaders } = details;
       UpsertKeyValue(responseHeaders, 'Access-Control-Allow-Origin', ['*']);
       UpsertKeyValue(responseHeaders, 'Access-Control-Allow-Headers', ['*']);
-      callback({
-        responseHeaders,
-      });
+      callback({ responseHeaders });
     });
 
     mainWindow.once('ready-to-show', () => {
@@ -101,40 +98,33 @@ function initializeApp() {
     });
 
     ipcMain.on('request-startup-at-login-changed', (_, value: boolean) => {
-      app.setLoginItemSettings({
-        openAtLogin: value,
-      });
+      app.setLoginItemSettings({ openAtLogin: value });
     });
 
-    /*
-     * Setting the value of the program's taskbar progress bar.
-     * value: The value to set the progress bar to. ( [0 - 1.0], -1 to hide the progress bar )
-     */
     ipcMain.on('set-window-progress-bar', (_, value: number) => {
       mainWindow.setProgressBar(value);
     });
 
-    const lastX = settings.get<string, number>('cache.main.lastWindowX');
-    const lastY = settings.get<string, number>('cache.main.lastWindowY');
-    const shouldMaximize = settings.get<string, boolean>('cache.main.maximized');
+    // Register all new system IPC handlers
+    SystemHandlers.setupIpcListeners(appSettings, getMainWindow);
+
+    const lastX = appSettings.get<string, number>('cache.main.lastWindowX');
+    const lastY = appSettings.get<string, number>('cache.main.lastWindowY');
+    const shouldMaximize = appSettings.get<string, boolean>('cache.main.maximized');
 
     if (shouldMaximize) {
       mainWindow.maximize();
     } else if (lastX && lastY) {
-      // 0 width and height should be reset to defaults
-      mainWindow.setBounds({
-        width: lastX,
-        height: lastY,
-      });
+      mainWindow.setBounds({ width: lastX, height: lastY });
     }
 
     mainWindow.center();
 
     if (
-      (settings.get('mainSettings.configDownloadUrl') as string) ===
+      (appSettings.get('mainSettings.configDownloadUrl') as string) ===
       'https://cdn.flybywiresim.com/installer/config/production.json'
     ) {
-      settings.set('mainSettings.configDownloadUrl', packageInfo.configUrls.production);
+      appSettings.set('mainSettings.configDownloadUrl', packageInfo.configUrls.production);
     }
 
     if (import.meta.env.DEV) {
@@ -153,8 +143,7 @@ function initializeApp() {
     });
 
     if (import.meta.env.DEV) {
-      // Open the DevTools.
-      settings.openInEditor();
+      appSettings.openInEditor();
       mainWindow.webContents.once('dom-ready', () => {
         mainWindow.webContents.openDevTools();
       });
@@ -164,20 +153,11 @@ function initializeApp() {
     if (process.env.NODE_ENV !== 'development') {
       let updateOptions;
       if (packageInfo.version.includes('dev')) {
-        updateOptions = {
-          provider: 'generic' as const,
-          url: 'https://flybywirecdn.com/installer/dev',
-        };
+        updateOptions = { provider: 'generic' as const, url: 'https://flybywirecdn.com/installer/dev' };
       } else if (packageInfo.version.includes('rc')) {
-        updateOptions = {
-          provider: 'generic' as const,
-          url: 'https://flybywirecdn.com/installer/rc',
-        };
+        updateOptions = { provider: 'generic' as const, url: 'https://flybywirecdn.com/installer/rc' };
       } else {
-        updateOptions = {
-          provider: 'generic' as const,
-          url: 'https://flybywirecdn.com/installer/release',
-        };
+        updateOptions = { provider: 'generic' as const, url: 'https://flybywirecdn.com/installer/release' };
       }
 
       const winAutoUpdater = new NsisUpdater(updateOptions);
@@ -187,30 +167,26 @@ function initializeApp() {
         winAutoUpdater.addListener('update-downloaded', (event, releaseNotes, releaseName) => {
           mainWindow.webContents.send(channels.update.downloaded, { event, releaseNotes, releaseName });
         });
-
         winAutoUpdater.addListener('update-available', () => {
           mainWindow.webContents.send(channels.update.available);
         });
-
         winAutoUpdater.addListener('error', (error) => {
           mainWindow.webContents.send(channels.update.error, { error });
         });
       }
+
       if (process.platform === 'linux' && process.env.APPIMAGE) {
         appImageAutoUpdater.addListener('update-downloaded', (event, releaseNotes, releaseName) => {
           mainWindow.webContents.send(channels.update.downloaded, { event, releaseNotes, releaseName });
         });
-
         appImageAutoUpdater.addListener('update-available', () => {
           mainWindow.webContents.send(channels.update.available);
         });
-
         appImageAutoUpdater.addListener('error', (error) => {
           mainWindow.webContents.send(channels.update.error, { error });
         });
       }
 
-      // tell autoupdater to check for updates
       mainWindow.once('show', () => {
         if (process.platform === 'win32') {
           winAutoUpdater.checkForUpdates().then();
@@ -242,17 +218,10 @@ function initializeApp() {
     app.quit();
   }
 
-  remote.initialize();
-
   app.setAppUserModelId('FlyByWire Installer');
-
-  let mainWindow: BrowserWindow;
 
   Menu.setApplicationMenu(null);
 
-  // This method will be called when Electron has finished
-  // initialization and is ready to create browser windows.
-  // Some APIs can only be used after this event occurs.
   app.on('ready', () => {
     createWindow();
 
@@ -266,9 +235,7 @@ function initializeApp() {
         .catch((err) => console.log('An error occurred: ', err));
     }
 
-    //Register keybinds
     mainWindow.webContents.on('before-input-event', (event, input) => {
-      // Check if the input event is for window reloading
       if (
         input.type === 'keyUp' &&
         (input.key.toLowerCase() === 'r' || input.key === 'F5') &&
@@ -277,16 +244,12 @@ function initializeApp() {
         mainWindow.isFocused() && mainWindow.reload();
       }
 
-      // Check if the input even is for dev tools
       if (input.type === 'keyUp' && input.key === 'F12' && (input.control || input.meta)) {
         mainWindow.isFocused() && mainWindow.webContents.toggleDevTools();
       }
     });
   });
 
-  // Quit when all windows are closed, except on macOS. There, it's common
-  // for applications and their menu bar to stay active until the user quits
-  // explicitly with Cmd + Q.
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') {
       app.quit();
@@ -294,14 +257,11 @@ function initializeApp() {
   });
 
   app.on('activate', () => {
-    // On OS X it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
     if (BrowserWindow.getAllWindows().length === 0) {
       createWindow();
     }
   });
 
-  // Someone tried to run a second instance, we should focus our window.
   app.on('second-instance', () => {
     if (mainWindow) {
       if (mainWindow.isMinimized()) {

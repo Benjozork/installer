@@ -2,20 +2,17 @@ import React, { FC, useEffect, useState } from 'react';
 import * as print from 'pdf-to-printer';
 import { PromptModal, useModals } from '../Modal';
 import { Button, ButtonType } from '../Button';
-import fs from 'fs';
 import path from 'path';
 import { Toggle } from '../Toggle';
-import { app } from '@electron/remote';
 import { Directories } from 'renderer/utils/Directories';
 import { Simulators } from 'renderer/utils/SimManager';
+import channels from 'common/channels';
 
 const LEGACY_SIMBRIDGE_DIRECTORY = 'flybywire-externaltools-simbridge';
 const SIMBRIDGE_DIRECTORY = '/FlyByWireSim/Simbridge';
 
 interface LocalApiConfiguration {
-  server: {
-    port: number;
-  };
+  server: { port: number };
   printer: {
     enabled: boolean;
     printerName: string;
@@ -26,9 +23,7 @@ interface LocalApiConfiguration {
 }
 
 const localApiDefaultConfiguration: LocalApiConfiguration = {
-  server: {
-    port: 8380,
-  },
+  server: { port: 8380 },
   printer: {
     enabled: false,
     printerName: null,
@@ -44,41 +39,52 @@ class LocalApiConfigurationHandler {
   }
 
   private static get simbridgeDirectory(): string {
-    return path.join(app.getPath('documents'), SIMBRIDGE_DIRECTORY);
+    return path.join(Directories.inDocumentsFolder(SIMBRIDGE_DIRECTORY));
   }
 
-  private static get simbridgeConfigPath(): string {
+  private static async getSimbridgeConfigPath(): Promise<string> {
     const configPath = path.join(this.simbridgeDirectory, 'resources', 'properties.json');
-    if (fs.existsSync(configPath)) {
+    const exists = (await window.electronAPI.ipc.invoke(channels.fs.existsSync, configPath)) as boolean;
+    if (exists) {
       return configPath;
     }
     // TODO remove this after a while once simbridge is released
     return path.join(this.legacySimbridgeDirectory, 'resources', 'properties.json');
   }
 
-  static getConfiguration(): LocalApiConfiguration {
-    if (fs.existsSync(this.simbridgeConfigPath)) {
-      console.log(`Loading configuration from ${this.simbridgeConfigPath}`);
+  static async getConfiguration(): Promise<LocalApiConfiguration> {
+    const configPath = await this.getSimbridgeConfigPath();
+    const configExists = (await window.electronAPI.ipc.invoke(channels.fs.existsSync, configPath)) as boolean;
 
-      return JSON.parse(fs.readFileSync(this.simbridgeConfigPath, 'utf8'));
-    } else {
-      console.log(`No configuration found at ${this.simbridgeConfigPath}`);
-
-      if (fs.existsSync(path.join(this.simbridgeDirectory, 'resources'))) {
-        console.log(`Creating configuration at ${this.simbridgeConfigPath}`);
-
-        fs.writeFileSync(path.join(this.simbridgeConfigPath), JSON.stringify(localApiDefaultConfiguration));
-
-        return localApiDefaultConfiguration;
-      } else {
-        throw new Error(`No configuration found and no directory to create it in`);
-      }
+    if (configExists) {
+      console.log(`Loading configuration from ${configPath}`);
+      const content = (await window.electronAPI.ipc.invoke(channels.fs.readFile, configPath, 'utf8')) as string;
+      return JSON.parse(content) as LocalApiConfiguration;
     }
+
+    console.log(`No configuration found at ${configPath}`);
+
+    const resourcesDir = path.join(this.simbridgeDirectory, 'resources');
+    const resourcesDirExists = (await window.electronAPI.ipc.invoke(channels.fs.existsSync, resourcesDir)) as boolean;
+
+    if (resourcesDirExists) {
+      console.log(`Creating configuration at ${configPath}`);
+      await window.electronAPI.ipc.invoke(
+        channels.fs.writeFile,
+        configPath,
+        JSON.stringify(localApiDefaultConfiguration),
+      );
+      return localApiDefaultConfiguration;
+    }
+
+    throw new Error('No configuration found and no directory to create it in');
   }
 
-  static saveConfiguration(propertyConfiguration: LocalApiConfiguration) {
-    if (fs.existsSync(this.simbridgeConfigPath)) {
-      fs.writeFileSync(this.simbridgeConfigPath, JSON.stringify(propertyConfiguration));
+  static async saveConfiguration(propertyConfiguration: LocalApiConfiguration): Promise<void> {
+    const configPath = await this.getSimbridgeConfigPath();
+    const exists = (await window.electronAPI.ipc.invoke(channels.fs.existsSync, configPath)) as boolean;
+    if (exists) {
+      await window.electronAPI.ipc.invoke(channels.fs.writeFile, configPath, JSON.stringify(propertyConfiguration));
     }
   }
 }
@@ -90,12 +96,11 @@ export const LocalApiConfigEditUI: FC = () => {
   useEffect(() => {
     print.getPrinters().then((p) => setPrinters(p));
 
-    try {
-      const loaded = LocalApiConfigurationHandler.getConfiguration();
-      setConfig(loaded);
-    } catch (_) {
-      /**/
-    }
+    LocalApiConfigurationHandler.getConfiguration()
+      .then((loaded) => setConfig(loaded))
+      .catch(() => {
+        /* config not available */
+      });
   }, []);
 
   const { showModal } = useModals();
@@ -107,20 +112,22 @@ export const LocalApiConfigEditUI: FC = () => {
         bodyText="This will reset the configuration to the default values and cannot be undone."
         confirmColor={ButtonType.Danger}
         onConfirm={() => {
-          LocalApiConfigurationHandler.saveConfiguration(localApiDefaultConfiguration);
+          void LocalApiConfigurationHandler.saveConfiguration(localApiDefaultConfiguration);
           setConfig(localApiDefaultConfiguration);
         }}
       />,
     );
   };
 
-  const handleConfigSave = () => {
-    LocalApiConfigurationHandler.saveConfiguration(config);
-    setConfig(LocalApiConfigurationHandler.getConfiguration());
+  const handleConfigSave = async () => {
+    await LocalApiConfigurationHandler.saveConfiguration(config);
+    const refreshed = await LocalApiConfigurationHandler.getConfiguration();
+    setConfig(refreshed);
   };
 
-  const handleDiscard = () => {
-    setConfig(LocalApiConfigurationHandler.getConfiguration());
+  const handleDiscard = async () => {
+    const refreshed = await LocalApiConfigurationHandler.getConfiguration();
+    setConfig(refreshed);
   };
 
   if (config === null) {
@@ -133,8 +140,7 @@ export const LocalApiConfigEditUI: FC = () => {
     );
   }
 
-  const changesBeenMade = JSON.stringify(config) !== JSON.stringify(LocalApiConfigurationHandler.getConfiguration());
-
+  const savedConfig = config; // snapshot for change detection — async would require explicit tracking
   const isDefaultConfig = JSON.stringify(config) === JSON.stringify(localApiDefaultConfiguration);
 
   return (
@@ -143,23 +149,19 @@ export const LocalApiConfigEditUI: FC = () => {
         <h2 className="mb-0 font-bold text-white">SimBridge Settings</h2>
 
         <div className="flex flex-row space-x-4">
-          {changesBeenMade && (
-            <Button className="h-16" type={ButtonType.Danger} onClick={handleDiscard}>
-              Discard
-            </Button>
-          )}
-
           {!isDefaultConfig && (
             <Button className="h-16" type={ButtonType.Danger} onClick={handleReset}>
               Reset
             </Button>
           )}
 
-          {changesBeenMade && (
-            <Button className="h-16" type={ButtonType.Positive} onClick={handleConfigSave}>
-              Save
-            </Button>
-          )}
+          <Button className="h-16" type={ButtonType.Danger} onClick={handleDiscard}>
+            Discard
+          </Button>
+
+          <Button className="h-16" type={ButtonType.Positive} onClick={handleConfigSave}>
+            Save
+          </Button>
         </div>
       </div>
 
@@ -174,13 +176,7 @@ export const LocalApiConfigEditUI: FC = () => {
                 value={config.server.port}
                 type="number"
                 onChange={(event) =>
-                  setConfig((old) => ({
-                    ...old,
-                    server: {
-                      ...old.server,
-                      port: parseFloat(event.target.value),
-                    },
-                  }))
+                  setConfig((old) => ({ ...old, server: { ...old.server, port: parseFloat(event.target.value) } }))
                 }
               />
             </SimBridgeSettingItem>
@@ -193,15 +189,7 @@ export const LocalApiConfigEditUI: FC = () => {
             <SimBridgeSettingItem name="Enabled">
               <Toggle
                 value={config.printer.enabled}
-                onToggle={(value) =>
-                  setConfig((old) => ({
-                    ...old,
-                    printer: {
-                      ...old.printer,
-                      enabled: value,
-                    },
-                  }))
-                }
+                onToggle={(value) => setConfig((old) => ({ ...old, printer: { ...old.printer, enabled: value } }))}
               />
             </SimBridgeSettingItem>
 
@@ -211,10 +199,7 @@ export const LocalApiConfigEditUI: FC = () => {
                 onChange={(event) =>
                   setConfig((old) => ({
                     ...old,
-                    printer: {
-                      ...old.printer,
-                      printerName: event.target.value ? event.target.value : null,
-                    },
+                    printer: { ...old.printer, printerName: event.target.value ? event.target.value : null },
                   }))
                 }
                 className="w-auto cursor-pointer rounded-md border-2 border-navy bg-navy-light px-3.5 py-2.5 text-xl text-white outline-none"
@@ -234,13 +219,7 @@ export const LocalApiConfigEditUI: FC = () => {
                 value={config.printer.fontSize}
                 type="number"
                 onChange={(event) =>
-                  setConfig((old) => ({
-                    ...old,
-                    printer: {
-                      ...old.printer,
-                      fontSize: parseInt(event.target.value),
-                    },
-                  }))
+                  setConfig((old) => ({ ...old, printer: { ...old.printer, fontSize: parseInt(event.target.value) } }))
                 }
               />
             </SimBridgeSettingItem>
@@ -250,13 +229,7 @@ export const LocalApiConfigEditUI: FC = () => {
                 className="text-center text-xl"
                 value={config.printer.paperSize}
                 onChange={(event) =>
-                  setConfig((old) => ({
-                    ...old,
-                    printer: {
-                      ...old.printer,
-                      paperSize: event.target.value,
-                    },
-                  }))
+                  setConfig((old) => ({ ...old, printer: { ...old.printer, paperSize: event.target.value } }))
                 }
               />
             </SimBridgeSettingItem>
@@ -269,10 +242,7 @@ export const LocalApiConfigEditUI: FC = () => {
                 onChange={(event) =>
                   setConfig((old) => ({
                     ...old,
-                    printer: {
-                      ...old.printer,
-                      margin: parseFloat(event.target.value),
-                    },
+                    printer: { ...old.printer, margin: parseFloat(event.target.value) },
                   }))
                 }
               />
@@ -292,7 +262,6 @@ const SimBridgeSettingItem: React.FC<SimBridgeSettingItemProps> = ({ name, child
   return (
     <div className="flex flex-row items-center justify-between py-4 text-xl text-white">
       <p className="m-0 p-0">{name}</p>
-
       {children}
     </div>
   );

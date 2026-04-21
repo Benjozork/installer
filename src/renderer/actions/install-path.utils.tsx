@@ -1,193 +1,112 @@
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
 import settings from 'renderer/rendererSettings';
 import { Directories } from 'renderer/utils/Directories';
-import { dialog } from '@electron/remote';
 import { managedSim, TypeOfSimulator } from 'renderer/utils/SimManager';
-
-const possibleBasePaths: Record<TypeOfSimulator, { store: string; steam: string; linuxSteam: string }> = {
-  msfs2020: {
-    store: path.join(Directories.localAppData(), '\\Packages\\Microsoft.FlightSimulator_8wekyb3d8bbwe\\LocalCache\\'),
-    steam: path.join(Directories.appData(), '\\Microsoft Flight Simulator\\'),
-    linuxSteam: path.join(
-      Directories.home(),
-      '.local/share/Steam/steamapps/compatdata/1250410/pfx/drive_c/users/steamuser/AppData/Roaming/Microsoft Flight Simulator',
-    ),
-  },
-  msfs2024: {
-    store: path.join(Directories.localAppData(), '\\Packages\\Microsoft.Limitless_8wekyb3d8bbwe\\LocalCache\\'),
-    steam: path.join(Directories.appData(), '\\Microsoft Flight Simulator 2024\\'),
-    linuxSteam: path.join(
-      Directories.home(),
-      '.local/share/Steam/steamapps/compatdata/2537590/pfx/drive_c/users/steamuser/AppData/Roaming/Microsoft Flight Simulator 2024',
-    ),
-  },
-};
+import channels from 'common/channels';
 
 const basePathCache: Record<string, string | null> = {};
+const communityDirCache: Record<string, string | null> = {};
 
-export const msfsBasePath = (sim: TypeOfSimulator): string | null => {
+export const msfsBasePath = async (sim: TypeOfSimulator): Promise<string | null> => {
   if (basePathCache[sim] !== undefined) {
     return basePathCache[sim];
   }
-
-  if (os.platform().toString() === 'linux') {
-    if (fs.existsSync(possibleBasePaths[sim].linuxSteam)) {
-      return (basePathCache[sim] = possibleBasePaths[sim].linuxSteam);
-    } else {
-      return (basePathCache[sim] = null);
-    }
-  }
-
-  // Ensure proper functionality in main- and renderer-process
-  let msfsConfigPath = null;
-
-  const steamPath = path.join(possibleBasePaths[sim].steam, 'UserCfg.opt');
-  const storePath = path.join(possibleBasePaths[sim].store, 'UserCfg.opt');
-  if (fs.existsSync(steamPath) && fs.existsSync(storePath)) return (basePathCache[sim] = null);
-  if (fs.existsSync(steamPath)) {
-    msfsConfigPath = steamPath;
-  } else if (fs.existsSync(storePath)) {
-    msfsConfigPath = storePath;
-  }
-
-  if (!msfsConfigPath) {
-    return (basePathCache[sim] = null);
-  }
-
-  return (basePathCache[sim] = path.dirname(msfsConfigPath));
+  const result = (await window.electronAPI.ipc.invoke(channels.msfs.detectBasePath, sim)) as string | null;
+  return (basePathCache[sim] = result);
 };
 
-const communityDirCache: Record<string, string | null> = {};
-
-export const defaultCommunityDir = (msfsBase: string | null): string | null => {
-  if (!msfsBase) {
-    return null;
+export const defaultCommunityDir = async (msfsBase: string | null, sim: TypeOfSimulator): Promise<string | null> => {
+  if (!msfsBase) return null;
+  const cacheKey = `${sim}:${msfsBase}`;
+  if (communityDirCache[cacheKey] !== undefined) {
+    return communityDirCache[cacheKey];
   }
-
-  if (communityDirCache[msfsBase] !== undefined) {
-    return communityDirCache[msfsBase];
-  }
-
-  const msfsConfigPath = path.join(msfsBase, 'UserCfg.opt');
-  if (!fs.existsSync(msfsConfigPath)) {
-    return (communityDirCache[msfsBase] = null);
-  }
-
-  try {
-    const msfsConfig = fs.readFileSync(msfsConfigPath).toString();
-    const msfsConfigLines = msfsConfig.split(/\r?\n/);
-    // Intentional space after InstalledPackagesPath to ensure not matching the InstalledPackagesPathNextBoot property added in MSFS2024 SU2.
-    const packagesPathLine = msfsConfigLines.find((line) => line.includes('InstalledPackagesPath '));
-    let communityDir = path.join(packagesPathLine.split(' ').slice(1).join(' ').replaceAll('"', ''), '\\Community');
-
-    if (os.platform().toString() === 'linux') {
-      if (msfsBase === possibleBasePaths.msfs2020.linuxSteam) {
-        communityDir = communityDir
-          .replaceAll('\\', '/')
-          .replace(
-            'C:/',
-            path.join(Directories.home(), '.local/share/Steam/steamapps/compatdata/1250410/pfx/drive_c/'),
-          );
-      } else if (msfsBase === possibleBasePaths.msfs2024.linuxSteam) {
-        communityDir = communityDir
-          .replaceAll('\\', '/')
-          .replace(
-            'C:/',
-            path.join(Directories.home(), '.local/share/Steam/steamapps/compatdata/2537590/pfx/drive_c/'),
-          );
-      } else {
-        return (communityDirCache[msfsBase] = null);
-      }
-    }
-
-    return (communityDirCache[msfsBase] = fs.existsSync(communityDir) ? communityDir : null);
-  } catch (e) {
-    console.warn('Could not parse community dir from file', msfsConfigPath);
-    console.error(e);
-    return (communityDirCache[msfsBase] = null);
-  }
+  const result = (await window.electronAPI.ipc.invoke(channels.msfs.detectCommunityDir, msfsBase, sim)) as string | null;
+  return (communityDirCache[cacheKey] = result);
 };
 
 const selectPath = async (currentPath: string, dialogTitle: string, setting: string): Promise<string> => {
-  const path = await dialog.showOpenDialog({
+  const result = (await window.electronAPI.ipc.invoke(channels.dialog.showOpenDialog, {
     title: dialogTitle,
     defaultPath: typeof currentPath === 'string' ? currentPath : '',
     properties: ['openDirectory'],
-  });
+  })) as Electron.OpenDialogReturnValue;
 
-  if (path.filePaths[0]) {
-    settings.set(setting, path.filePaths[0]);
-    return path.filePaths[0];
-  } else {
-    return '';
+  if (result.filePaths[0]) {
+    settings.set(setting, result.filePaths[0]);
+    return result.filePaths[0];
   }
+  return '';
 };
 
 export const setupSimulatorBasePath = async (sim: TypeOfSimulator): Promise<string> => {
   const currentPath = Directories.simulatorBasePath(sim);
 
+  const [storeExists, steamExists] = await Promise.all([
+    window.electronAPI.ipc.invoke(channels.fs.existsSync, await getPossibleStorePath(sim)) as Promise<boolean>,
+    window.electronAPI.ipc.invoke(channels.fs.existsSync, await getPossibleSteamPath(sim)) as Promise<boolean>,
+  ]);
+
   const availablePaths: string[] = [];
-  if (fs.existsSync(possibleBasePaths[sim].store)) {
-    availablePaths.push('Microsoft Store Edition');
-  }
-  if (fs.existsSync(possibleBasePaths[sim].steam)) {
-    availablePaths.push('Steam Edition');
-  }
+  if (storeExists) availablePaths.push('Microsoft Store Edition');
+  if (steamExists) availablePaths.push('Steam Edition');
 
   if (availablePaths.length > 0) {
     availablePaths.push('Custom Directory');
 
-    const { response } = await dialog.showMessageBox({
+    const { response } = (await window.electronAPI.ipc.invoke(channels.dialog.showMessageBox, {
       title: 'FlyByWire Installer',
       message: `We found a possible MSFS ${sim.slice(-4)} installation.`,
       type: 'warning',
       buttons: availablePaths,
-    });
+    })) as Electron.MessageBoxReturnValue;
 
     const selection = availablePaths[response];
-    switch (selection) {
-      case 'Microsoft Store Edition':
-        settings.set(`mainSettings.simulator.${sim}.basePath`, possibleBasePaths[sim].store);
-        return possibleBasePaths[sim].store;
-      case 'Steam Edition':
-        settings.set(`mainSettings.simulator.${sim}.basePath`, possibleBasePaths[sim].steam);
-        return possibleBasePaths[sim].steam;
-      case 'Custom Directory':
-        break;
+    if (selection === 'Microsoft Store Edition') {
+      const p = await getPossibleStorePath(sim);
+      settings.set(`mainSettings.simulator.${sim}.basePath`, p);
+      return p;
+    } else if (selection === 'Steam Edition') {
+      const p = await getPossibleSteamPath(sim);
+      settings.set(`mainSettings.simulator.${sim}.basePath`, p);
+      return p;
     }
+    // else fall through to custom directory picker
   }
 
-  return await selectPath(
-    currentPath,
-    `Select your MSFS ${sim.slice(-4)} base directory`,
-    `mainSettings.simulator.${sim}.basePath`,
-  );
+  return selectPath(currentPath, `Select your MSFS ${sim.slice(-4)} base directory`, `mainSettings.simulator.${sim}.basePath`);
 };
 
 export const setupMsfsCommunityPath = async (sim: TypeOfSimulator): Promise<string> => {
   const currentPath = Directories.installLocation(sim);
-
-  return await selectPath(
-    currentPath,
-    `Select your MSFS ${sim.slice(-4)} community directory`,
-    `mainSettings.simulator.${sim}.communityPath`,
-  );
+  return selectPath(currentPath, `Select your MSFS ${sim.slice(-4)} community directory`, `mainSettings.simulator.${sim}.communityPath`);
 };
 
 export const setupInstallPath = async (sim: TypeOfSimulator): Promise<string> => {
   const currentPath = Directories.installLocation(sim);
-
-  return await selectPath(
-    currentPath,
-    `Select your MSFS ${sim.slice(-4)} install directory`,
-    `mainSettings.simulator.${sim}.installPath`,
-  );
+  return selectPath(currentPath, `Select your MSFS ${sim.slice(-4)} install directory`, `mainSettings.simulator.${sim}.installPath`);
 };
 
 export const setupTempLocation = async (): Promise<string> => {
   const currentPath = Directories.tempLocation(managedSim());
-
-  return await selectPath(currentPath, 'Select a location for temporary folders', 'mainSettings.tempLocation');
+  return selectPath(currentPath, 'Select a location for temporary folders', 'mainSettings.tempLocation');
 };
+
+// ---------------------------------------------------------------------------
+// Helpers that derive the OS-specific candidate paths via main-provided app paths
+// ---------------------------------------------------------------------------
+
+async function getPossibleStorePath(sim: TypeOfSimulator): Promise<string> {
+  const base = await (window.electronAPI.ipc.invoke(channels.app.getPath, 'appData') as Promise<string>);
+  if (sim === 'msfs2020') {
+    return `${base}\\..\\Local\\Packages\\Microsoft.FlightSimulator_8wekyb3d8bbwe\\LocalCache\\`;
+  }
+  return `${base}\\..\\Local\\Packages\\Microsoft.Limitless_8wekyb3d8bbwe\\LocalCache\\`;
+}
+
+async function getPossibleSteamPath(sim: TypeOfSimulator): Promise<string> {
+  const appData = await (window.electronAPI.ipc.invoke(channels.app.getPath, 'appData') as Promise<string>);
+  if (sim === 'msfs2020') {
+    return `${appData}\\Microsoft Flight Simulator\\`;
+  }
+  return `${appData}\\Microsoft Flight Simulator 2024\\`;
+}

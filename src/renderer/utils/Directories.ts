@@ -1,32 +1,31 @@
 import path from 'path';
 import { Addon } from 'renderer/utils/InstallerConfiguration';
-import fs from 'fs';
 import settings from 'renderer/rendererSettings';
-import { app } from '@electron/remote';
+import { appPaths } from 'renderer/utils/AppPaths';
 import { Simulators, TypeOfSimulator } from './SimManager';
+import channels from 'common/channels';
 
 const TEMP_DIRECTORY_PREFIX = 'flybywire-current-install';
 
-const TEMP_DIRECTORY_PREFIXES_FOR_CLEANUP = ['flybywire_current_install', TEMP_DIRECTORY_PREFIX];
 export class Directories {
   private static sanitize(suffix: string): string {
     return path.normalize(suffix).replace(/^(\.\.(\/|\\|$))+/, '');
   }
 
   static appData(): string {
-    return app.getPath('appData');
+    return appPaths['appData'];
   }
 
   static localAppData(): string {
-    return path.join(app.getPath('appData'), '..', 'Local');
+    return path.join(appPaths['appData'], '..', 'Local');
   }
 
   static home(): string {
-    return app.getPath('home');
+    return appPaths['home'];
   }
 
   static osTemp(): string {
-    return app.getPath('temp');
+    return appPaths['temp'];
   }
 
   static simulatorBasePath(sim: TypeOfSimulator): string | null {
@@ -82,90 +81,40 @@ export class Directories {
 
   static inPackageCache(addon: Addon, targetDir: string): string {
     const baseDir = this.inPackages(addon.simulator, this.sanitize(addon.targetDirectory));
-
     return path.join(baseDir, this.sanitize(targetDir));
   }
 
   static temp(sim: TypeOfSimulator): string {
-    const dir = path.join(
+    return path.join(
       Directories.tempLocation(sim),
       `${TEMP_DIRECTORY_PREFIX}-${(Math.random() * 1000).toFixed(0)}`,
     );
-    if (fs.existsSync(dir)) {
-      return Directories.temp(sim);
-    }
-    return dir;
   }
 
-  static removeAllTemp(): void {
-    console.log('[CLEANUP] Removing all temp directories');
-
-    for (const sim in Simulators) {
-      if (!fs.existsSync(Directories.tempLocation(sim as TypeOfSimulator))) {
-        console.warn('[CLEANUP] Location of temporary folders does not exist. Aborting');
-        return;
-      }
-
-      try {
-        const dirents = fs
-          .readdirSync(Directories.tempLocation(sim as TypeOfSimulator), { withFileTypes: true })
-          .filter((dirEnt) => dirEnt.isDirectory())
-          .filter((dirEnt) => TEMP_DIRECTORY_PREFIXES_FOR_CLEANUP.some((it) => dirEnt.name.startsWith(it)));
-
-        for (const dir of dirents) {
-          const fullPath = Directories.inTempLocation(sim as TypeOfSimulator, dir.name);
-
-          console.log('[CLEANUP] Removing', fullPath);
-          try {
-            fs.rmSync(fullPath, { recursive: true });
-            console.log('[CLEANUP] Removed', fullPath);
-          } catch (e) {
-            console.error('[CLEANUP] Could not remove', fullPath, e);
-          }
-        }
-
-        console.log('[CLEANUP] Finished removing all temp directories');
-      } catch (e) {
-        console.error('[CLEANUP] Could not scan folder', Directories.tempLocation(sim as TypeOfSimulator), e);
-      }
-    }
+  static removeAllTemp(): Promise<void> {
+    return window.electronAPI.ipc.invoke(channels.directories.removeAllTemp) as Promise<void>;
   }
 
-  static removeAlternativesForAddon(addon: Addon): void {
-    addon.alternativeNames?.forEach((altName) => {
-      const altDir = Directories.inInstallLocation(addon.simulator, altName);
-
-      if (fs.existsSync(altDir)) {
-        console.log('Removing alternative', altDir);
-        fs.rmSync(altDir, { recursive: true });
-      }
-    });
+  static removeAlternativesForAddon(addon: Addon): Promise<void> {
+    return window.electronAPI.ipc.invoke(channels.directories.removeAlternativesForAddon, {
+      simulator: addon.simulator,
+      alternativeNames: addon.alternativeNames,
+    }) as Promise<void>;
   }
 
-  static isFragmenterInstall(target: string | Addon): boolean {
+  static isFragmenterInstall(target: string | Addon): Promise<boolean> {
     const targetDir =
       typeof target === 'string' ? target : Directories.inInstallLocation(target.simulator, target.targetDirectory);
-
-    return fs.existsSync(path.join(targetDir, 'install.json'));
+    return window.electronAPI.ipc.invoke(channels.directories.isFragmenterInstall, targetDir) as Promise<boolean>;
   }
 
-  static isGitInstall(target: string | Addon): boolean {
+  static isGitInstall(target: string | Addon): Promise<boolean> {
     const targetDir =
       typeof target === 'string' ? target : Directories.inInstallLocation(target.simulator, target.targetDirectory);
-
-    try {
-      const symlinkPath = fs.readlinkSync(targetDir);
-      if (symlinkPath && fs.existsSync(path.join(symlinkPath, '/../../../.git'))) {
-        console.log('Is git repo', targetDir);
-        return true;
-      }
-    } catch {
-      console.log('Is not git repo', targetDir);
-      return false;
-    }
+    return window.electronAPI.ipc.invoke(channels.directories.isGitInstall, targetDir) as Promise<boolean>;
   }
 
   static inDocumentsFolder(targetDir: string): string {
-    return path.join(app.getPath('documents'), this.sanitize(targetDir));
+    return path.join(appPaths['documents'], this.sanitize(targetDir));
   }
 }

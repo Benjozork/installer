@@ -1,6 +1,6 @@
 import { Addon, ExternalApplicationDefinition, Publisher } from 'renderer/utils/InstallerConfiguration';
-import net from 'net';
 import { Resolver } from 'renderer/utils/Resolver';
+import channels from 'common/channels';
 
 export class ExternalApps {
   static forAddon(addon: Addon, publisher: Publisher): ExternalApplicationDefinition[] {
@@ -43,24 +43,8 @@ export class ExternalApps {
     });
   }
 
-  static async determineStateWithTcp(app: ExternalApplicationDefinition): Promise<boolean> {
-    return new Promise((resolve, reject) => {
-      try {
-        const socket = net.connect(app.port);
-
-        socket.on('connect', () => {
-          resolve(true);
-          socket.destroy();
-        });
-        socket.on('error', () => {
-          resolve(false);
-          socket.destroy();
-        });
-      } catch (e) {
-        reject(new Error('Error while establishing TCP external app state, see exception above'));
-        console.error(e);
-      }
-    });
+  static determineStateWithTcp(app: ExternalApplicationDefinition): Promise<boolean> {
+    return window.electronAPI.ipc.invoke(channels.net.checkTcpPort, app.port) as Promise<boolean>;
   }
 
   static async kill(app: ExternalApplicationDefinition): Promise<void> {

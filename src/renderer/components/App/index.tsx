@@ -13,7 +13,6 @@ import { Redirect, Route, Switch, useHistory, useLocation } from 'react-router-d
 import { useAppSelector } from 'renderer/redux/store';
 import settings, { useSetting } from 'renderer/rendererSettings';
 import './index.css';
-import { ipcRenderer } from 'electron';
 import channels from 'common/channels';
 import { ModalContainer } from '../Modal';
 import { PublisherSection } from 'renderer/components/PublisherSection';
@@ -49,7 +48,6 @@ const App = () => {
       history.push(settings.get('cache.main.lastShownSection'));
     }
 
-    // Let's listen for a route change and set the last shown section to the incoming route pathname
     history.listen((location) => {
       settings.set('cache.main.lastShownSection', location.pathname);
     });
@@ -58,7 +56,7 @@ const App = () => {
   useEffect(() => {
     const updateCheck = setInterval(
       () => {
-        ipcRenderer.send(channels.checkForInstallerUpdate);
+        window.electronAPI.ipc.send(channels.checkForInstallerUpdate);
 
         for (const addon of addons) {
           void InstallManager.checkForUpdates(addon);
@@ -74,8 +72,6 @@ const App = () => {
 
   const isDevelopmentConfigURL = () => {
     const productionURL = packageInfo.configUrls.production;
-    // Protection against accidental screenshots of confidential config urls
-    // Limited to flybywire config url to prevent 3rd party urls to be hidden
     let showDevURL = 'n/a';
     if (!configUrl.includes(packageInfo.configUrls.confidentialBaseUrl)) {
       showDevURL = configUrl;
